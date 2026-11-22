@@ -90,3 +90,52 @@ remote shortcuts (e.g. finding the Send button). Plain D-pad navigation keeps wo
 
 The signing key in `keystore/` is only for this personal sideloaded app; don't reuse it
 for anything you publish.
+
+---
+
+# Duck Blast
+
+A duck-shooting game in the same repo (`duckblast/`). It plays on the TV, and your
+Android phone is the gun: point the phone at the screen and pull the trigger.
+
+**One APK for both devices.** Install `duck-blast.apk` (from the same
+[latest release](../../releases/latest)) on the TV *and* on your phone:
+
+- On the TV it shows up as **Duck Blast**, which is the game.
+- On the phone it shows up as **Duck Blast Remote**, which is the gun.
+
+## Playing
+
+1. Start Duck Blast on the TV.
+2. Open Duck Blast Remote on the phone. On the same Wi-Fi it finds the TV by itself.
+   If it doesn't, type the address shown on the TV's title screen.
+3. Hold the phone like a TV remote (top edge toward the screen), point at the
+   target in the middle of the TV, and tap **RECENTER**.
+4. Shoot the **START** sign.
+
+- **Fire:** tap anywhere on the big button, or press a volume key.
+- **RECENTER:** point at the middle of the TV and tap it whenever the aim drifts.
+- **⚙ settings:** aim sensitivity, touchpad aiming (drag to aim, for phones without a
+  gyroscope), and switching TVs.
+- Up to 4 phones can play at once. Each one gets its own crosshair colour and score.
+- No phone handy? The TV remote works too: arrows aim, OK fires, Play/Pause starts.
+  Back goes to the title screen.
+
+## Rules
+
+Each round has 10 ducks, released two at a time, and you get 3 shells per pair.
+Ducks fly away when time runs out or everyone is out of shells. Hit enough of them
+to clear the round (6 at first, up to 9 later). Each round they fly faster. Brown ducks
+are worth more, and golden ducks are rare and worth the most. Hit all 10 for a perfect
+round bonus.
+
+## How it works
+
+- `GameActivity` / `GameView`: the game, drawn entirely in code (no image assets) on a
+  1920×1080 virtual canvas.
+- `GameServer`: a TCP server on port 47823, advertised over mDNS (`_duckblast._tcp`).
+- `RemoteActivity` / `PadView` / `RemoteLink`: the phone side. Uses the gyro-fused
+  *game rotation vector* sensor to work out where the phone's top edge points,
+  relative to the RECENTER direction, and streams that aim point to the TV.
+- `Sfx`: all sounds are synthesised at startup.
+- Protocol: plain text lines, documented in `Net.java`.

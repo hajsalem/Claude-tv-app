@@ -26,18 +26,21 @@ jobs:
           echo "sdk.dir=$ANDROID_HOME" > local.properties
           ./gradlew --no-daemon assembleRelease
           cp app/build/outputs/apk/release/app-release.apk claude-tv.apk
+          cp duckblast/build/outputs/apk/release/duckblast-release.apk duck-blast.apk
 
       - uses: actions/upload-artifact@v4
         with:
           name: claude-tv-apk
-          path: claude-tv.apk
+          path: |
+            claude-tv.apk
+            duck-blast.apk
 
       - name: Publish as the "latest" release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release delete latest --cleanup-tag --yes || true
-          gh release create latest claude-tv.apk \
+          gh release create latest claude-tv.apk duck-blast.apk \
             --target "$GITHUB_SHA" \
             --title "Claude TV (build ${{ github.run_number }})" \
-            --notes "Built from ${GITHUB_REF_NAME} @ ${GITHUB_SHA::7}. Sideload claude-tv.apk on your Android TV."
+            --notes "Built from ${GITHUB_REF_NAME} @ ${GITHUB_SHA::7}. Sideload claude-tv.apk on your Android TV. duck-blast.apk goes on both the TV and your phone."

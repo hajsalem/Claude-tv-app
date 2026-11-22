@@ -13,4 +13,4 @@ dependencyResolutionManagement {
     }
 }
 rootProject.name = "ClaudeTV"
-include ':app'
+include ":app", ":duckblast"

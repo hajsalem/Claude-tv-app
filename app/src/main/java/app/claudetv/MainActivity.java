@@ -16,8 +16,14 @@ import android.os.Bundle;
 import android.speech.RecognitionListener;
 import android.speech.RecognizerIntent;
 import android.speech.SpeechRecognizer;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.SystemClock;
+import android.view.InputDevice;
 import android.view.KeyEvent;
+import android.view.MotionEvent;
 import android.view.View;
+import android.widget.FrameLayout;
 import android.view.WindowManager;
 import android.view.inputmethod.InputMethodManager;
 import android.webkit.CookieManager;
@@ -46,7 +52,8 @@ import java.util.ArrayList;
  * Remote controls:
  *   D-pad            move focus (and scroll the chat when there's nothing to move to)
  *   OK               click / open keyboard in the prompt box
- *   Hold OK or Menu  app menu (voice, new chat, text size, reload...)
+ *   Hold OK or Menu  app menu (voice, new chat, pointer mode, text size, reload...)
+ *   Blue key         toggle pointer mode (on-screen mouse for things the D-pad can't reach)
  *   Mic / Search     dictate a prompt
  *   Ch+/Ch-, FF/RW   page up / page down
  *   Back             leave the prompt box, go back, then exit
@@ -60,11 +67,11 @@ public class MainActivity extends Activity {
     private static final int REQ_MIC_PERMISSION_VOICE = 3;
     private static final int REQ_MIC_PERMISSION_WEB = 4;
 
-    // A regular desktop Chrome UA: gets the roomy desktop layout on a TV and
-    // avoids sign-in providers rejecting the embedded WebView user agent.
-    private static final String DESKTOP_UA =
-            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
-                    + "Chrome/130.0.0.0 Safari/537.36";
+    // Desktop-style UA built from the real WebView UA (same Chrome version and
+    // CPU, minus the "Android ... wv ... Mobile" bits). Gets the roomy desktop
+    // layout and avoids sign-in providers rejecting embedded WebViews, while
+    // staying consistent enough with the engine not to look like a bot.
+    private String desktopUa;
 
     private WebView webView;
     private SharedPreferences prefs;
@@ -74,6 +81,14 @@ public class MainActivity extends Activity {
     private ValueCallback<Uri[]> fileCallback;
     private PermissionRequest pendingWebPermission;
     private SpeechRecognizer recognizer;
+
+    // Pointer mode: an on-screen mouse for things the D-pad can't reach
+    // (e.g. the Cloudflare "verify you are human" checkbox).
+    private CursorView cursor;
+    private boolean pointerMode;
+    private boolean pointerAuto;
+    private float px, py;
+    private final Handler handler = new Handler(Looper.getMainLooper());
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -88,7 +103,14 @@ public class MainActivity extends Activity {
         webView.setBackgroundColor(Color.rgb(0x26, 0x26, 0x24));
         webView.setFocusable(true);
         webView.setFocusableInTouchMode(true);
-        setContentView(webView);
+        FrameLayout root = new FrameLayout(this);
+        root.addView(webView, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+        cursor = new CursorView(this);
+        cursor.setVisibility(View.GONE);
+        root.addView(cursor, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+        setContentView(root);
 
         WebSettings s = webView.getSettings();
         s.setJavaScriptEnabled(true);
@@ -101,8 +123,9 @@ public class MainActivity extends Activity {
         s.setUseWideViewPort(true);
         s.setBuiltInZoomControls(false);
         s.setTextZoom(prefs.getInt("textZoom", 100));
+        desktopUa = buildDesktopUa(s.getUserAgentString());
         if (prefs.getBoolean("desktopUa", true)) {
-            s.setUserAgentString(DESKTOP_UA);
+            s.setUserAgentString(desktopUa);
         }
 
         CookieManager cookies = CookieManager.getInstance();
@@ -134,6 +157,8 @@ public class MainActivity extends Activity {
         int code = event.getKeyCode();
         boolean down = event.getAction() == KeyEvent.ACTION_DOWN;
         boolean up = event.getAction() == KeyEvent.ACTION_UP;
+
+        if (pointerMode && handlePointerKey(event, code, down, up)) return true;
 
         switch (code) {
             case KeyEvent.KEYCODE_DPAD_CENTER:
@@ -177,6 +202,11 @@ public class MainActivity extends Activity {
             case KeyEvent.KEYCODE_PAGE_DOWN:
             case KeyEvent.KEYCODE_MEDIA_FAST_FORWARD:
                 if (down) js("window.__tvnav && __tvnav.scrollPage('down')");
+                return true;
+
+            case KeyEvent.KEYCODE_PROG_BLUE:
+            case KeyEvent.KEYCODE_BUTTON_X:
+                if (up) setPointerMode(!pointerMode, false);
                 return true;
 
             case KeyEvent.KEYCODE_PROG_GREEN:
@@ -250,6 +280,7 @@ public class MainActivity extends Activity {
                 "✏️  New chat",
                 "💬  All chats",
                 "⌨️  Jump to prompt box",
+                "🖱️  Pointer mode: " + (pointerMode ? "ON" : "OFF"),
                 "🔍  Bigger text (now " + zoom + "%)",
                 "🔎  Smaller text",
                 "📨  Send voice prompts automatically: " + (autoSend ? "ON" : "OFF"),
@@ -265,19 +296,20 @@ public class MainActivity extends Activity {
                         case 1: webView.loadUrl(HOME_URL); break;
                         case 2: webView.loadUrl(RECENTS_URL); break;
                         case 3: js("window.__tvnav && __tvnav.focusInput()"); showKeyboard(); break;
-                        case 4: setTextZoom(Math.min(zoom + 15, 250)); break;
-                        case 5: setTextZoom(Math.max(zoom - 15, 70)); break;
-                        case 6:
+                        case 4: setPointerMode(!pointerMode, false); break;
+                        case 5: setTextZoom(Math.min(zoom + 15, 250)); break;
+                        case 6: setTextZoom(Math.max(zoom - 15, 70)); break;
+                        case 7:
                             prefs.edit().putBoolean("autoSend", !autoSend).apply();
                             toast("Auto-send " + (!autoSend ? "on" : "off"));
                             break;
-                        case 7:
+                        case 8:
                             prefs.edit().putBoolean("desktopUa", !desktop).apply();
-                            webView.getSettings().setUserAgentString(!desktop ? DESKTOP_UA : null);
+                            webView.getSettings().setUserAgentString(!desktop ? desktopUa : null);
                             webView.reload();
                             break;
-                        case 8: webView.reload(); break;
-                        case 9: finish(); break;
+                        case 9: webView.reload(); break;
+                        case 10: finish(); break;
                     }
                 })
                 .show();
@@ -402,6 +434,7 @@ public class MainActivity extends Activity {
         public void onPageFinished(WebView view, String url) {
             injectNav();
             CookieManager.getInstance().flush();
+            checkForChallenge(8);
         }
 
         @Override
@@ -461,6 +494,168 @@ public class MainActivity extends Activity {
                 return false;
             }
         }
+    }
+
+    // --------------------------------------------------------- pointer mode
+
+    private static final String FIND_CHALLENGE_JS =
+            "window.__tvnav ? JSON.stringify(__tvnav.findChallenge()) : 'null'";
+
+    /** Poll a few times after a load: the Cloudflare widget appears after a moment. */
+    private void checkForChallenge(final int tries) {
+        webView.evaluateJavascript(FIND_CHALLENGE_JS, result -> {
+            JSONObject c = parseJsonResult(result);
+            if (c != null) {
+                if (!pointerMode) setPointerMode(true, true);
+                if (c.has("x")) {
+                    float scale = webView.getWidth() / (float) Math.max(1, c.optDouble("vw", 1));
+                    movePointer((float) c.optDouble("x") * scale, (float) c.optDouble("y") * scale);
+                    if (!c.optBoolean("widget") && tries > 0) {
+                        handler.postDelayed(() -> checkForChallenge(tries - 1), 700);
+                    }
+                } else if (tries > 0) {
+                    handler.postDelayed(() -> checkForChallenge(tries - 1), 700);
+                }
+            } else if (pointerMode && pointerAuto) {
+                setPointerMode(false, false);
+            } else if (tries > 6) {
+                // Widget may not be in the DOM yet right after load.
+                handler.postDelayed(() -> checkForChallenge(tries - 1), 700);
+            }
+        });
+    }
+
+    private static JSONObject parseJsonResult(String result) {
+        // evaluateJavascript hands back a JSON-encoded JS string, e.g. "\"{...}\"".
+        if (result == null || result.equals("null") || result.equals("\"null\"")) return null;
+        try {
+            String inner = new org.json.JSONArray("[" + result + "]").getString(0);
+            if (inner.equals("null")) return null;
+            return new JSONObject(inner);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private void setPointerMode(boolean on, boolean auto) {
+        pointerMode = on;
+        pointerAuto = on && auto;
+        cursor.setVisibility(on ? View.VISIBLE : View.GONE);
+        if (on) {
+            if (px == 0 && py == 0) movePointer(webView.getWidth() / 2f, webView.getHeight() / 2f);
+            else movePointer(px, py);
+            Toast.makeText(this, auto
+                    ? "Verification page: move the pointer with the arrows and press OK on the checkbox"
+                    : "Pointer mode on: arrows move, OK clicks, Back exits",
+                    Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void movePointer(float x, float y) {
+        px = Math.max(0, Math.min(webView.getWidth() - 1, x));
+        py = Math.max(0, Math.min(webView.getHeight() - 1, y));
+        cursor.moveTo(px, py);
+        // Real hover moves, so the page (and the verification widget) sees a mouse.
+        sendMouse(MotionEvent.ACTION_HOVER_MOVE, 0);
+    }
+
+    private boolean handlePointerKey(KeyEvent event, int code, boolean down, boolean up) {
+        float d = getResources().getDisplayMetrics().density;
+        float step = Math.min(8 + event.getRepeatCount() * 3, 40) * d;
+        switch (code) {
+            case KeyEvent.KEYCODE_DPAD_UP:
+                if (down) {
+                    if (py <= 2) sendMouse(MotionEvent.ACTION_SCROLL, 1.5f);
+                    else movePointer(px, py - step);
+                }
+                return true;
+            case KeyEvent.KEYCODE_DPAD_DOWN:
+                if (down) {
+                    if (py >= webView.getHeight() - 3) sendMouse(MotionEvent.ACTION_SCROLL, -1.5f);
+                    else movePointer(px, py + step);
+                }
+                return true;
+            case KeyEvent.KEYCODE_DPAD_LEFT:
+                if (down) movePointer(px - step, py);
+                return true;
+            case KeyEvent.KEYCODE_DPAD_RIGHT:
+                if (down) movePointer(px + step, py);
+                return true;
+            case KeyEvent.KEYCODE_DPAD_CENTER:
+            case KeyEvent.KEYCODE_BUTTON_A:
+            case KeyEvent.KEYCODE_ENTER:
+                if (down) {
+                    if (event.getRepeatCount() == 0) {
+                        centerLongPressed = false;
+                    } else if (!centerLongPressed && event.getRepeatCount() >= 8) {
+                        centerLongPressed = true;
+                        showMenu();
+                    }
+                } else if (up) {
+                    if (!centerLongPressed) tapAtPointer();
+                    centerLongPressed = false;
+                }
+                return true;
+            case KeyEvent.KEYCODE_BACK:
+                if (up) {
+                    setPointerMode(false, false);
+                    toast("Pointer mode off");
+                }
+                return true;
+        }
+        return false;
+    }
+
+    private void sendMouse(int action, float vscroll) {
+        long t = SystemClock.uptimeMillis();
+        MotionEvent.PointerProperties pp = new MotionEvent.PointerProperties();
+        pp.id = 0;
+        pp.toolType = MotionEvent.TOOL_TYPE_MOUSE;
+        MotionEvent.PointerCoords pc = new MotionEvent.PointerCoords();
+        pc.x = px;
+        pc.y = py;
+        pc.pressure = 0;
+        pc.size = 1;
+        if (action == MotionEvent.ACTION_SCROLL) pc.setAxisValue(MotionEvent.AXIS_VSCROLL, vscroll);
+        MotionEvent e = MotionEvent.obtain(t, t, action, 1,
+                new MotionEvent.PointerProperties[]{pp}, new MotionEvent.PointerCoords[]{pc},
+                0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_MOUSE, 0);
+        webView.dispatchGenericMotionEvent(e);
+        e.recycle();
+    }
+
+    /** A real (trusted) tap at the pointer, which the page can't tell from a finger. */
+    private void tapAtPointer() {
+        final long downTime = SystemClock.uptimeMillis();
+        final float x = px, y = py;
+        MotionEvent downEv = MotionEvent.obtain(downTime, downTime, MotionEvent.ACTION_DOWN, x, y, 0);
+        downEv.setSource(InputDevice.SOURCE_TOUCHSCREEN);
+        webView.dispatchTouchEvent(downEv);
+        downEv.recycle();
+        handler.postDelayed(() -> {
+            long t = SystemClock.uptimeMillis();
+            MotionEvent upEv = MotionEvent.obtain(downTime, t, MotionEvent.ACTION_UP, x, y, 0);
+            upEv.setSource(InputDevice.SOURCE_TOUCHSCREEN);
+            webView.dispatchTouchEvent(upEv);
+            upEv.recycle();
+        }, 70);
+        // If the tap landed in a text box, bring up the keyboard.
+        handler.postDelayed(() -> webView.evaluateJavascript(
+                "window.__tvnav ? __tvnav.activeIsEditable() : false", r -> {
+                    if ("true".equals(r)) showKeyboard();
+                }), 250);
+    }
+
+    static String buildDesktopUa(String webViewUa) {
+        String chrome = "Chrome/130.0.0.0";
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("Chrome/[\\d.]+").matcher(webViewUa);
+        if (m.find()) chrome = m.group();
+        String cpu = "x86_64";
+        String arch = System.getProperty("os.arch", "");
+        if (arch.contains("aarch64") || arch.contains("arm64")) cpu = "aarch64";
+        else if (arch.contains("arm")) cpu = "armv8l";
+        return "Mozilla/5.0 (X11; Linux " + cpu + ") AppleWebKit/537.36 (KHTML, like Gecko) "
+                + chrome + " Safari/537.36";
     }
 
     private void injectNav() {

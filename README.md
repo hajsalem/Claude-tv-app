@@ -15,6 +15,10 @@ the TV home screen, and is driven entirely by the remote.
   *Send voice prompts automatically* in the menu to skip that step.
 - **Stays signed in** – cookies persist across launches.
 - **Text size** – bigger/smaller text from the menu, remembered between launches.
+- **Pointer mode** – an on-screen mouse pointer for things the D-pad can't reach. Arrows
+  move it (hold to speed up; push against the top/bottom edge to scroll), OK clicks for
+  real, Back turns it off. It switches on by itself on Cloudflare's "Verify you are human"
+  page and parks the pointer on the checkbox, so you just press OK.
 
 ## Remote controls
 
@@ -26,6 +30,7 @@ the TV home screen, and is driven entirely by the remote.
 | Search / mic, red key | Voice input |
 | Ch+ / Ch-, Rew / FF | Page up / page down |
 | Green key | New chat |
+| Blue key (or menu) | Pointer mode on/off |
 | Back | Leave prompt box → previous page → press twice to exit |
 
 Note: on many Google TV remotes the mic/Assistant button is reserved by the system and
@@ -56,6 +61,12 @@ Typing on a TV is painful, so sign in once:
   login instead.
 
 Your session is stored in the app's cookie jar, so you only do this once.
+
+## "Verify you are human" loops
+
+If the check keeps coming back after you tick it, open the menu and turn
+**Desktop layout** off. That uses the TV's stock browser identity instead, which some
+checks trust more. You can turn it back on once you're signed in.
 
 ## Building locally
 

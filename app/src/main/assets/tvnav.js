@@ -419,6 +419,45 @@
 
     scrollPage: function (dir) { scrollBy(dir, 0.85); },
 
+    activeIsEditable: function () { return isEditable(document.activeElement); },
+
+    // Cloudflare "verify you are human" page/widget. Returns where the
+    // checkbox is (CSS px) so the native pointer can be put on it, or null.
+    findChallenge: function () {
+      var title = document.title || '';
+      var page = /just a moment|attention required|verify you are human|security check|one more step/i.test(title) ||
+          /__cf_chl/.test(location.href) ||
+          !!document.querySelector('#challenge-form, #challenge-stage, #challenge-body-text, ' +
+                                   'script[src*="challenge-platform"]');
+      var widget = document.querySelector('iframe[src*="challenges.cloudflare.com"]');
+      if (!widget) {
+        var resp = document.querySelector('input[name="cf-turnstile-response"]');
+        var box = resp && resp.parentElement;
+        if (box && box.getBoundingClientRect().width > 50) widget = box;
+      }
+      if (!widget) widget = document.querySelector('.cf-turnstile, [id^="cf-chl-widget"]');
+      if (!widget && page) {
+        // The widget is a ~300x65 box, usually inside a closed shadow root.
+        var divs = document.querySelectorAll('div');
+        for (var i = 0; i < divs.length; i++) {
+          var r0 = divs[i].getBoundingClientRect();
+          if (r0.width >= 280 && r0.width <= 330 && r0.height >= 55 && r0.height <= 85) {
+            widget = divs[i];
+            break;
+          }
+        }
+      }
+      if (widget) {
+        var r = widget.getBoundingClientRect();
+        if (r.width > 50 && r.height > 20) {
+          return { x: r.left + Math.min(30, r.width / 2), y: r.top + r.height / 2,
+                   vw: window.innerWidth, widget: true };
+        }
+      }
+      if (page) return { x: window.innerWidth / 2, y: window.innerHeight / 2, vw: window.innerWidth, widget: false };
+      return null;
+    },
+
     blur: function () {
       var a = document.activeElement;
       if (isEditable(a)) { a.blur(); current = a; drawRing(); return true; }

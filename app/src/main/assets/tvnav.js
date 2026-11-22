@@ -453,6 +453,19 @@
 
     scrollPage: function (dir) { scrollBy(dir, 0.85); },
 
+    // Where to tap to put the caret at the end of the focused text box (CSS px).
+    editablePoint: function () {
+      var el = document.activeElement;
+      if (!isEditable(el)) return null;
+      el.scrollIntoView({ block: 'nearest' });
+      var r = el.getBoundingClientRect();
+      var top = Math.max(r.top, 0), bottom = Math.min(r.bottom, window.innerHeight);
+      var left = Math.max(r.left, 0), right = Math.min(r.right, window.innerWidth);
+      if (bottom - top < 4 || right - left < 4) return null;
+      return { x: right - Math.min(24, (right - left) / 2), y: bottom - Math.min(18, (bottom - top) / 2),
+               vw: window.innerWidth };
+    },
+
     activeIsEditable: function () { return isEditable(document.activeElement); },
 
     // Cloudflare "verify you are human" page/widget. Returns where the

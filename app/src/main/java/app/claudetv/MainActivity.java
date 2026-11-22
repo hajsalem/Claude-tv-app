@@ -230,7 +230,7 @@ public class MainActivity extends Activity {
     private void activate() {
         webView.evaluateJavascript("window.__tvnav ? __tvnav.activate() : 'none'", result -> {
             if (result != null && result.contains("editable")) {
-                showKeyboard();
+                openKeyboardOnFocusedField();
             } else if (result != null && result.contains("none")) {
                 // Script not injected (e.g. error page): fall back to a real Enter.
                 webView.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER));
@@ -298,7 +298,8 @@ public class MainActivity extends Activity {
                         case 1: webView.loadUrl(HOME_URL); break;
                         case 2: webView.loadUrl(RECENTS_URL); break;
                         case 3: webView.loadUrl(SETTINGS_URL); break;
-                        case 4: js("window.__tvnav && __tvnav.focusInput()"); showKeyboard(); break;
+                        case 4: js("window.__tvnav && __tvnav.focusInput()");
+                            handler.postDelayed(this::openKeyboardOnFocusedField, 150); break;
                         case 5: setPointerMode(!pointerMode, false); break;
                         case 6: setTextZoom(Math.min(zoom + 15, 250)); break;
                         case 7: setTextZoom(Math.max(zoom - 15, 70)); break;
@@ -629,8 +630,41 @@ public class MainActivity extends Activity {
 
     /** A real (trusted) tap at the pointer, which the page can't tell from a finger. */
     private void tapAtPointer() {
+        tapAt(px, py);
+    }
+
+    /**
+     * WebView drops the keyboard again if we just call showSoftInput(): it only
+     * keeps it up when the text box was focused by a real tap. So tap it.
+     */
+    private void openKeyboardOnFocusedField() {
+        webView.evaluateJavascript(
+                "window.__tvnav ? JSON.stringify(__tvnav.editablePoint()) : 'null'", result -> {
+                    JSONObject p = parseJsonResult(result);
+                    if (p == null) {
+                        showKeyboard();
+                        return;
+                    }
+                    float scale = webView.getWidth() / (float) Math.max(1, p.optDouble("vw", 1));
+                    tapAt((float) p.optDouble("x") * scale, (float) p.optDouble("y") * scale);
+                    // Belt and braces for WebViews that still don't raise it.
+                    handler.postDelayed(() -> {
+                        if (!imeVisible()) showKeyboard();
+                    }, 600);
+                });
+    }
+
+    private boolean imeVisible() {
+        if (Build.VERSION.SDK_INT >= 30) {
+            android.view.WindowInsets in = webView.getRootWindowInsets();
+            return in != null && in.isVisible(android.view.WindowInsets.Type.ime());
+        }
+        return true; // can't tell on older Android; the tap normally works there
+    }
+
+    /** A real (trusted) tap, which the page can't tell from a finger. */
+    private void tapAt(final float x, final float y) {
         final long downTime = SystemClock.uptimeMillis();
-        final float x = px, y = py;
         MotionEvent downEv = MotionEvent.obtain(downTime, downTime, MotionEvent.ACTION_DOWN, x, y, 0);
         downEv.setSource(InputDevice.SOURCE_TOUCHSCREEN);
         webView.dispatchTouchEvent(downEv);
@@ -642,11 +676,6 @@ public class MainActivity extends Activity {
             webView.dispatchTouchEvent(upEv);
             upEv.recycle();
         }, 70);
-        // If the tap landed in a text box, bring up the keyboard.
-        handler.postDelayed(() -> webView.evaluateJavascript(
-                "window.__tvnav ? __tvnav.activeIsEditable() : false", r -> {
-                    if ("true".equals(r)) showKeyboard();
-                }), 250);
     }
 
     static String buildDesktopUa(String webViewUa) {

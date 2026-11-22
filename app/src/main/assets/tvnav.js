@@ -118,8 +118,10 @@
     return document;
   }
 
-  function candidates() {
-    var root = scope();
+  // inList: candidates inside one scrolling list, including ones scrolled out
+  // of view (we scroll them in when we get there).
+  function candidates(root, inList) {
+    root = root || scope();
     var list = root.querySelectorAll(FOCUSABLE);
     var out = [];
     for (var i = 0; i < list.length; i++) {
@@ -133,8 +135,10 @@
       if (el.isContentEditable && el.parentElement && el.parentElement.isContentEditable) continue;
       if (!isVisible(el)) continue;
       var r = el.getBoundingClientRect();
-      if (!onScreen(r)) continue;
-      if (!reachable(el, r)) continue;
+      if (!inList) {
+        if (!onScreen(r)) continue;
+        if (!reachable(el, r)) continue;
+      }
       out.push({ el: el, r: r });
     }
     return out;
@@ -236,14 +240,14 @@
     return best || document.scrollingElement || document.documentElement;
   }
 
-  function canScroll(dir) {
-    var s = scroller();
+  function canScroll(dir, box) {
+    var s = box || scroller();
     if (dir === 'up') return s.scrollTop > 1;
     return s.scrollTop + s.clientHeight < s.scrollHeight - 1;
   }
 
-  function scrollBy(dir, fraction) {
-    var s = scroller();
+  function scrollBy(dir, fraction, box) {
+    var s = box || scroller();
     var h = (s === document.scrollingElement ? window.innerHeight : s.clientHeight);
     var dy = h * (fraction || 0.6) * (dir === 'up' ? -1 : 1);
     s.scrollBy({ top: dy, behavior: 'smooth' });
@@ -274,8 +278,38 @@
     return { left: v.right + 1, right: v.right + 2, top: v.top, bottom: v.bottom };
   }
 
+  // Up/down inside a scrolling list (sidebar chats, the transcript): walk the
+  // list's own items, scrolling it as needed, before jumping elsewhere.
+  function moveInList(dir, cur) {
+    var a = document.activeElement;
+    if (!a || a === document.body || isEditable(a)) return false;
+    var box = scrollableAncestor(a);
+    if (!box) return false;
+    var best = null, bestScore = Infinity;
+    var cands = candidates(box, true);
+    for (var i = 0; i < cands.length; i++) {
+      if (cands[i].el === a || cands[i].el.contains(a)) continue;
+      var s = score(cur, cands[i].r, dir);
+      if (s < bestScore) { bestScore = s; best = cands[i].el; }
+    }
+    if (best) {
+      if (bestScore > box.clientHeight * 0.45 && canScroll(dir, box)) {
+        scrollBy(dir, 0.5, box);   // long text between items: read it first
+        return true;
+      }
+      focusEl(best);
+      best.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      setTimeout(drawRing, 250);
+      return true;
+    }
+    // Nothing further yet, but the list can scroll (e.g. more chats load lazily).
+    if (canScroll(dir, box)) { scrollBy(dir, 0.6, box); return true; }
+    return false;
+  }
+
   function move(dir) {
     var cur = currentRect(dir);
+    if ((dir === 'up' || dir === 'down') && !virtualIn && moveInList(dir, cur)) return true;
     var best = null, bestScore = Infinity;
     var cands = candidates();
     for (var i = 0; i < cands.length; i++) {

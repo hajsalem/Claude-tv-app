@@ -1,0 +1,46 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'app.claudetv'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'app.claudetv'
+        minSdk 24
+        targetSdk 35
+        versionCode Integer.parseInt(System.getenv('GITHUB_RUN_NUMBER') ?: '1')
+        versionName "1.0." + (System.getenv('GITHUB_RUN_NUMBER') ?: '0')
+    }
+
+    // Fixed key committed to the repo so every CI build can install over the
+    // previous one. Fine for a personal sideloaded app; don't reuse it for a store.
+    signingConfigs {
+        personal {
+            storeFile rootProject.file('keystore/claudetv.keystore')
+            storePassword 'claudetv'
+            keyAlias 'claudetv'
+            keyPassword 'claudetv'
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.personal
+        }
+        debug {
+            signingConfig signingConfigs.personal
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    lint {
+        abortOnError false
+    }
+}

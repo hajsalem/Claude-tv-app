@@ -62,6 +62,7 @@ public class MainActivity extends Activity {
 
     private static final String HOME_URL = "https://claude.ai/new";
     private static final String RECENTS_URL = "https://claude.ai/recents";
+    private static final String SETTINGS_URL = "https://claude.ai/settings";
     private static final int REQ_VOICE = 1;
     private static final int REQ_FILE = 2;
     private static final int REQ_MIC_PERMISSION_VOICE = 3;
@@ -279,6 +280,7 @@ public class MainActivity extends Activity {
                 "🎤  Voice input",
                 "✏️  New chat",
                 "💬  All chats",
+                "⚙️  Account settings",
                 "⌨️  Jump to prompt box",
                 "🖱️  Pointer mode: " + (pointerMode ? "ON" : "OFF"),
                 "🔍  Bigger text (now " + zoom + "%)",
@@ -295,21 +297,22 @@ public class MainActivity extends Activity {
                         case 0: startVoice(); break;
                         case 1: webView.loadUrl(HOME_URL); break;
                         case 2: webView.loadUrl(RECENTS_URL); break;
-                        case 3: js("window.__tvnav && __tvnav.focusInput()"); showKeyboard(); break;
-                        case 4: setPointerMode(!pointerMode, false); break;
-                        case 5: setTextZoom(Math.min(zoom + 15, 250)); break;
-                        case 6: setTextZoom(Math.max(zoom - 15, 70)); break;
-                        case 7:
+                        case 3: webView.loadUrl(SETTINGS_URL); break;
+                        case 4: js("window.__tvnav && __tvnav.focusInput()"); showKeyboard(); break;
+                        case 5: setPointerMode(!pointerMode, false); break;
+                        case 6: setTextZoom(Math.min(zoom + 15, 250)); break;
+                        case 7: setTextZoom(Math.max(zoom - 15, 70)); break;
+                        case 8:
                             prefs.edit().putBoolean("autoSend", !autoSend).apply();
                             toast("Auto-send " + (!autoSend ? "on" : "off"));
                             break;
-                        case 8:
+                        case 9:
                             prefs.edit().putBoolean("desktopUa", !desktop).apply();
                             webView.getSettings().setUserAgentString(!desktop ? desktopUa : null);
                             webView.reload();
                             break;
-                        case 9: webView.reload(); break;
-                        case 10: finish(); break;
+                        case 10: webView.reload(); break;
+                        case 11: finish(); break;
                     }
                 })
                 .show();

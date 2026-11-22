@@ -26,7 +26,7 @@ the TV home screen, and is driven entirely by the remote.
 | --- | --- |
 | D-pad | Move focus / scroll the chat |
 | OK | Click, or open the keyboard in the prompt box |
-| **Hold OK** or Menu | App menu (voice, new chat, all chats, text size, reload, exit) |
+| **Hold OK** or Menu | App menu (voice, new chat, all chats, account settings, pointer mode, text size, reload, exit) |
 | Search / mic, red key | Voice input |
 | Ch+ / Ch-, Rew / FF | Page up / page down |
 | Green key | New chat |

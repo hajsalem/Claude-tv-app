@@ -14,6 +14,7 @@ package app.duckblast;
  * TV -> Phone
  *   WELCOME <n> <argb>  you are player n, crosshair colour
  *   FULL                game already has the maximum number of players
+ *   BYE <text>          TV is turning this phone away (e.g. it is in Joy-Con mode)
  *   STAT <score> <ammo> current score and shells left (-1 = unlimited)
  *   HIT <points>        your shot hit something
  *   EMPTY               you pulled the trigger with no shells left

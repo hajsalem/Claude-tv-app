@@ -56,6 +56,7 @@ public class RemoteActivity extends Activity implements SensorEventListener {
     private final Map<String, String> found = new LinkedHashMap<>(); // "host:port" -> label
 
     private RemoteLink link;
+    private String byeReason;   // why the TV turned us away, shown on the connect screen
     private String linkTarget;
     private boolean autoConnect = true;
 
@@ -421,7 +422,9 @@ public class RemoteActivity extends Activity implements SensorEventListener {
             @Override public void onDisconnected(String why) {
                 if (link != self[0]) return;
                 link = null;
-                connectStatus.setText(why + ". Tap a TV or type its address.");
+                String reason = byeReason != null ? byeReason : why;
+                byeReason = null;
+                connectStatus.setText(reason + ". Tap a TV or type its address.");
                 showConnect();
             }
         });
@@ -448,7 +451,10 @@ public class RemoteActivity extends Activity implements SensorEventListener {
                 }
                 break;
             case "FULL":
-                connectStatus.setText("That game already has 4 players.");
+                byeReason = "That game already has 4 players";
+                break;
+            case "BYE":
+                byeReason = line.length() > 4 ? line.substring(4) : null;
                 break;
             case "STAT":
                 if (p.length >= 3) {

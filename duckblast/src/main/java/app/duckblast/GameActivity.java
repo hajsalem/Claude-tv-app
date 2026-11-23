@@ -17,6 +17,7 @@ public class GameActivity extends Activity {
     private GameServer server;
     private Sfx sfx;
     private GameView game;
+    private JoyCons joyCons;
     private SharedPreferences prefs;
     private boolean up, down, left, right;
     private long lastBack;
@@ -29,7 +30,9 @@ public class GameActivity extends Activity {
         server = new GameServer(this);
         server.start();
         sfx = new Sfx(this);
-        game = new GameView(this, server, sfx, prefs.getInt("best", 0));
+        game = new GameView(this, server, sfx, prefs.getInt("best", 0), prefs.getBoolean("joycons", false));
+        joyCons = new JoyCons(this, game);
+        joyCons.start();
         setContentView(game);
         hideSystemUi();
     }
@@ -50,18 +53,20 @@ public class GameActivity extends Activity {
     @Override
     protected void onPause() {
         super.onPause();
-        prefs.edit().putInt("best", game.bestScore()).apply();
+        prefs.edit().putInt("best", game.bestScore()).putBoolean("joycons", game.isJoyconMode()).apply();
     }
 
     @Override
     protected void onDestroy() {
         super.onDestroy();
         server.stop();
+        joyCons.stop();
         sfx.release();
     }
 
     @Override
     public boolean onKeyDown(int code, KeyEvent e) {
+        if (joyCons.onKeyDown(e)) return true;
         switch (code) {
             case KeyEvent.KEYCODE_DPAD_UP: up = true; break;
             case KeyEvent.KEYCODE_DPAD_DOWN: down = true; break;
@@ -76,9 +81,11 @@ public class GameActivity extends Activity {
                 return true;
             case KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE:
             case KeyEvent.KEYCODE_MEDIA_PLAY:
-            case KeyEvent.KEYCODE_MENU:
             case KeyEvent.KEYCODE_BUTTON_START:
                 if (e.getRepeatCount() == 0) game.remoteStart();
+                return true;
+            case KeyEvent.KEYCODE_MENU:
+                if (e.getRepeatCount() == 0) game.toggleMode();
                 return true;
             default:
                 return super.onKeyDown(code, e);
@@ -88,7 +95,13 @@ public class GameActivity extends Activity {
     }
 
     @Override
+    public boolean onGenericMotionEvent(android.view.MotionEvent e) {
+        return joyCons.onMotion(e) || super.onGenericMotionEvent(e);
+    }
+
+    @Override
     public boolean onKeyUp(int code, KeyEvent e) {
+        if (JoyCons.isPad(e.getSource()) && game.isJoyconMode()) return true;
         switch (code) {
             case KeyEvent.KEYCODE_DPAD_UP: up = false; break;
             case KeyEvent.KEYCODE_DPAD_DOWN: down = false; break;

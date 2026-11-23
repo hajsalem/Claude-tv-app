@@ -48,7 +48,9 @@ final class GameView extends SurfaceView implements SurfaceHolder.Callback, Runn
         int index;              // 0..3, decides colour and P-number
         int color;
         String name;
-        GameServer.Client client; // null for the TV remote player
+        GameServer.Client client; // null for the TV remote player and Joy-Cons
+        int padId = -1;           // input device id for a Joy-Con player
+        boolean padGyro;          // Joy-Con aims with its motion sensor (else its stick)
         float tx = W / 2, ty = H / 2; // target position (world)
         float x = W / 2, y = H / 2;   // smoothed, drawn position
         int score, ammo = SHELLS, roundHits;
@@ -101,6 +103,30 @@ final class GameView extends SurfaceView implements SurfaceHolder.Callback, Runn
     private float bannerTime;
     private int bestScore;
 
+    // ---- controller mode: phones over Wi-Fi, or Joy-Cons paired to the TV
+    private volatile boolean joyconMode;
+    private volatile boolean modeToggle;
+
+    static final int PAD_JOIN = 1, PAD_FIRE = 2, PAD_RECENTER = 3, PAD_LEAVE = 4, PAD_MSG = 5;
+
+    static final class PadEvent {
+        final int type, id;
+        final String text;
+        final boolean gyro;
+
+        PadEvent(int type, int id, String text, boolean gyro) {
+            this.type = type;
+            this.id = id;
+            this.text = text;
+            this.gyro = gyro;
+        }
+    }
+
+    private final java.util.concurrent.ConcurrentLinkedQueue<PadEvent> padEvents = new java.util.concurrent.ConcurrentLinkedQueue<>();
+    private final java.util.concurrent.ConcurrentHashMap<Integer, float[]> padSticks = new java.util.concurrent.ConcurrentHashMap<>();
+    private final Object gyroLock = new Object();
+    private final java.util.HashMap<Integer, float[]> gyroMoves = new java.util.HashMap<>();
+
     // TV-remote crosshair (works without a phone)
     private Player remote;
     volatile int remoteDx, remoteDy;
@@ -121,8 +147,9 @@ final class GameView extends SurfaceView implements SurfaceHolder.Callback, Runn
     private String address;
     private float addrRefresh;
 
-    GameView(Context c, GameServer server, Sfx sfx, int best) {
+    GameView(Context c, GameServer server, Sfx sfx, int best, boolean joycons) {
         super(c);
+        this.joyconMode = joycons;
         this.server = server;
         this.sfx = sfx;
         this.bestScore = best;
@@ -193,6 +220,36 @@ final class GameView extends SurfaceView implements SurfaceHolder.Callback, Runn
         remoteFire = true;
     }
 
+    boolean isJoyconMode() {
+        return joyconMode;
+    }
+
+    /** Switch between phone and Joy-Con mode (only takes effect on the title / game-over screen). */
+    void toggleMode() {
+        modeToggle = true;
+    }
+
+    void pad(int type, int id, String text, boolean gyro) {
+        padEvents.add(new PadEvent(type, id, text, gyro));
+    }
+
+    /** Joy-Con stick position, -1..1 on each axis. */
+    void padStick(int id, float x, float y) {
+        padSticks.put(id, new float[]{x, y});
+    }
+
+    /** Joy-Con motion since the last call, already converted to screen pixels. */
+    void padGyro(int id, float dxPx, float dyPx) {
+        synchronized (gyroLock) {
+            float[] a = gyroMoves.get(id);
+            if (a == null) gyroMoves.put(id, new float[]{dxPx, dyPx});
+            else {
+                a[0] += dxPx;
+                a[1] += dyPx;
+            }
+        }
+    }
+
     /** Play/Pause or Menu on the TV remote: start from the title screen. */
     void remoteStart() {
         remoteStart = true;
@@ -216,6 +273,11 @@ final class GameView extends SurfaceView implements SurfaceHolder.Callback, Runn
         bannerTime -= dt;
 
         drainNetwork();
+        drainPads(dt);
+        if (modeToggle) {
+            modeToggle = false;
+            if (phase == Phase.TITLE || phase == Phase.GAME_OVER) switchMode();
+        }
         updateRemote(dt);
         if (backPressed) {
             backPressed = false;
@@ -288,6 +350,11 @@ final class GameView extends SurfaceView implements SurfaceHolder.Callback, Runn
             switch (e.type) {
                 case GameServer.JOIN:
                     if (pl != null) break;
+                    if (joyconMode) {
+                        e.client.send("BYE This TV is set to Joy-Con mode. Switch it to Phone mode on the TV's title screen");
+                        e.client.close();
+                        break;
+                    }
                     int idx = freeIndex();
                     if (idx < 0) {
                         e.client.send("FULL");
@@ -336,6 +403,114 @@ final class GameView extends SurfaceView implements SurfaceHolder.Callback, Runn
                     break;
             }
         }
+    }
+
+    private Player findPad(int id) {
+        for (Player pl : players) if (pl.padId == id) return pl;
+        return null;
+    }
+
+    private Player joinPad(int id, String name, boolean gyro) {
+        Player pl = findPad(id);
+        if (pl != null || !joyconMode) return pl;
+        int idx = freeIndex();
+        if (idx < 0) {
+            showBanner("Already 4 players");
+            return null;
+        }
+        pl = new Player();
+        pl.index = idx;
+        pl.color = PLAYER_COLORS[idx];
+        pl.padId = id;
+        pl.padGyro = gyro;
+        pl.name = name == null || name.isEmpty() ? "Joy-Con" : name;
+        pl.calibrated = !gyro;
+        pl.ammo = phase == Phase.WAVE ? 0 : SHELLS;
+        pl.lastSeen = time;
+        players.add(pl);
+        showBanner("P" + (idx + 1) + " Joy-Con joined" + (gyro ? ": aim at the target, press Y" : " (aims with the stick)"));
+        sfx.play(sfx.ding);
+        return pl;
+    }
+
+    private void drainPads(float dt) {
+        PadEvent e;
+        while ((e = padEvents.poll()) != null) {
+            Player pl = findPad(e.id);
+            switch (e.type) {
+                case PAD_JOIN:
+                    joinPad(e.id, e.text, e.gyro);
+                    break;
+                case PAD_FIRE:
+                    if (pl == null) pl = joinPad(e.id, e.text, e.gyro);
+                    if (pl != null) {
+                        pl.lastSeen = time;
+                        fire(pl, pl.x, pl.y);
+                    }
+                    break;
+                case PAD_RECENTER:
+                    if (pl != null) {
+                        pl.tx = pl.x = W / 2;
+                        pl.ty = pl.y = H / 2;
+                        pl.calibrated = true;
+                        pl.lastSeen = time;
+                    }
+                    break;
+                case PAD_LEAVE:
+                    if (pl != null) {
+                        players.remove(pl);
+                        showBanner("P" + (pl.index + 1) + " Joy-Con disconnected");
+                    }
+                    break;
+                case PAD_MSG:
+                    showBanner(e.text);
+                    break;
+            }
+        }
+        for (Player pl : players) {
+            if (pl.padId < 0) continue;
+            float[] st = padSticks.get(pl.padId);
+            if (st != null && (st[0] != 0 || st[1] != 0)) {
+                pl.tx += st[0] * 1100 * dt;
+                pl.ty += st[1] * 1100 * dt;
+                pl.lastSeen = time;
+            }
+            synchronized (gyroLock) {
+                float[] g = gyroMoves.remove(pl.padId);
+                if (g != null) {
+                    pl.tx += g[0];
+                    pl.ty += g[1];
+                    if (Math.abs(g[0]) + Math.abs(g[1]) > 0.5f) pl.lastSeen = time;
+                }
+            }
+            pl.tx = clamp(pl.tx, -40, W + 40);
+            pl.ty = clamp(pl.ty, -40, H + 40);
+            pl.x = pl.tx;
+            pl.y = pl.ty;
+        }
+    }
+
+    private void switchMode() {
+        joyconMode = !joyconMode;
+        for (Iterator<Player> it = players.iterator(); it.hasNext(); ) {
+            Player pl = it.next();
+            if (joyconMode && pl.client != null) {
+                pl.client.send("BYE This TV switched to Joy-Con mode");
+                pl.client.close();
+                it.remove();
+            } else if (!joyconMode && pl.padId >= 0) {
+                it.remove();
+            }
+        }
+        showBanner(joyconMode ? "Joy-Con mode" : "Phone mode");
+        sfx.play(sfx.ding);
+    }
+
+    // Mode button on the title screen (top right): shoot it or press Menu / minus to switch.
+    private static final float MODE_X = W - 330, MODE_Y = 34, MODE_W = 300, MODE_H = 64;
+
+    private boolean modeContains(float x, float y) {
+        return x > MODE_X - 20 && x < MODE_X + MODE_W + 20 && y > MODE_Y - 20 && y < MODE_Y + MODE_H + 20;
     }
 
     private void updateRemote(float dt) {
@@ -559,6 +734,11 @@ final class GameView extends SurfaceView implements SurfaceHolder.Callback, Runn
 
         boolean practice = phase == Phase.TITLE || phase == Phase.GAME_OVER;
 
+        if (practice && modeContains(x, y)) {
+            sfx.play(sfx.shot);
+            switchMode();
+            return;
+        }
         if (practice && signContains(x, y) && phaseTime > 1f) {
             sfx.play(sfx.shot);
             flash = 0.5f;
@@ -1139,13 +1319,23 @@ final class GameView extends SurfaceView implements SurfaceHolder.Callback, Runn
         switch (phase) {
             case TITLE: {
                 outlined(c, "DUCK BLAST", W / 2, 175, 150, 0xFFFFC23A, 1);
-                outlined(c, "Point your phone at the TV and blast the ducks", W / 2, 245, 40, 0xFFFFFFFF, 1);
                 String addr = address == null ? "(not connected to a network)" : address;
-                String[] lines = {
-                        "1.  Install Duck Blast on your Android phone and open  “Duck Blast Remote”",
-                        "2.  Same Wi-Fi as this TV — it finds the TV by itself (or type  " + addr + ")",
-                        "3.  Hold the phone like a remote, aim at the target below, tap  RECENTER",
-                };
+                String[] lines;
+                if (joyconMode) {
+                    outlined(c, "Grab a Joy-Con and blast the ducks", W / 2, 245, 40, 0xFFFFFFFF, 1);
+                    lines = new String[]{
+                            "1.  Pair each Joy-Con with this TV: Settings → Remotes & Accessories → Add",
+                            "2.  Pull the trigger (ZR) to join. Fire with ZR, R, ZL or L",
+                            "3.  Point at the target below and press  Y  to recenter (or aim with the stick)",
+                    };
+                } else {
+                    outlined(c, "Point your phone at the TV and blast the ducks", W / 2, 245, 40, 0xFFFFFFFF, 1);
+                    lines = new String[]{
+                            "1.  Install Duck Blast on your Android phone and open  “Duck Blast Remote”",
+                            "2.  Same Wi-Fi as this TV — it finds the TV by itself (or type  " + addr + ")",
+                            "3.  Hold the phone like a remote, aim at the target below, tap  RECENTER",
+                    };
+                }
                 text.setTextAlign(Paint.Align.LEFT);
                 for (int i = 0; i < lines.length; i++) outlined(c, lines[i], 330, 315 + i * 48, 32, 0xFFEFF6FF, 1);
                 text.setTextAlign(Paint.Align.CENTER);
@@ -1153,7 +1343,10 @@ final class GameView extends SurfaceView implements SurfaceHolder.Callback, Runn
                     outlined(c, "No TV remote handy? Arrows aim, OK fires.", W / 2, 1040, 28, 0xCCFFFFFF, 1);
                 }
                 drawCenterTarget(c);
-                if (bestScore > 0) outlined(c, "BEST  " + fmt(bestScore), W - 190, 60, 34, 0xFFFFE27A, 1);
+                drawModeButton(c);
+                text.setTextAlign(Paint.Align.LEFT);
+                if (bestScore > 0) outlined(c, "BEST  " + fmt(bestScore), 40, 70, 34, 0xFFFFE27A, 1);
+                text.setTextAlign(Paint.Align.CENTER);
                 break;
             }
             case ROUND_INTRO: {
@@ -1180,7 +1373,10 @@ final class GameView extends SurfaceView implements SurfaceHolder.Callback, Runn
                             W / 2, 285 + i * 58, 44, pl.color, 1);
                     i++;
                 }
-                outlined(c, "BEST  " + fmt(bestScore), W - 190, 60, 34, 0xFFFFE27A, 1);
+                drawModeButton(c);
+                text.setTextAlign(Paint.Align.LEFT);
+                outlined(c, "BEST  " + fmt(bestScore), 40, 70, 34, 0xFFFFE27A, 1);
+                text.setTextAlign(Paint.Align.CENTER);
                 break;
             }
             default:
@@ -1191,6 +1387,20 @@ final class GameView extends SurfaceView implements SurfaceHolder.Callback, Runn
             float by = phase == Phase.TITLE || phase == Phase.GAME_OVER ? 950 : 110;
             outlined(c, banner, W / 2, by, 56, 0xFFFFFFFF, a);
         }
+    }
+
+    private void drawModeButton(Canvas c) {
+        p.setStyle(Paint.Style.FILL);
+        p.setColor(0xCC101418);
+        rect.set(MODE_X, MODE_Y, MODE_X + MODE_W, MODE_Y + MODE_H);
+        c.drawRoundRect(rect, 16, 16, p);
+        p.setStyle(Paint.Style.STROKE);
+        p.setStrokeWidth(3);
+        p.setColor(joyconMode ? 0xFFFF5A5A : 0xFF36C8FF);
+        c.drawRoundRect(rect, 16, 16, p);
+        p.setStyle(Paint.Style.FILL);
+        outlined(c, joyconMode ? "CONTROLLER: JOY-CON" : "CONTROLLER: PHONE", MODE_X + MODE_W / 2, MODE_Y + 30, 26, 0xFFFFFFFF, 1);
+        outlined(c, "shoot to switch · Menu / − button", MODE_X + MODE_W / 2, MODE_Y + 55, 18, 0xCCFFFFFF, 1);
     }
 
     private void drawCenterTarget(Canvas c) {
@@ -1265,7 +1475,7 @@ final class GameView extends SurfaceView implements SurfaceHolder.Callback, Runn
                     c.drawRect(rect, p);
                 }
             } else {
-                outlined(c, pl.client == null ? "remote" : "phone", x + w - 50, y + 36, 22, 0xAAFFFFFF, 1);
+                outlined(c, pl.padId >= 0 ? (pl.padGyro ? "Joy-Con" : "stick") : pl.client == null ? "remote" : "phone", x + w - 50, y + 36, 22, 0xAAFFFFFF, 1);
             }
             i++;
         }

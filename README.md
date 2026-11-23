@@ -121,6 +121,23 @@ Android phone is the gun: point the phone at the screen and pull the trigger.
 - No phone handy? The TV remote works too: arrows aim, OK fires, Play/Pause starts.
   Back goes to the title screen.
 
+## Joy-Con mode
+
+The title screen has a **Controller: Phone / Joy-Con** button (top right). Shoot it, or
+press Menu on the TV remote or − on a Joy-Con, to switch.
+
+1. Pair each Joy-Con with the TV: *Settings → Remotes & Accessories → Add accessory*,
+   then hold the small sync button on the Joy-Con's rail.
+2. Pull ZR (the trigger on most Joy-Con gun accessories) to join. Up to 4 players.
+3. **Fire:** ZR, R, ZL, L or A. **Recenter:** point at the middle of the TV and press Y
+   (or X / B). **Start:** + or shoot the START sign.
+4. **Aiming:** if the TV lets apps read the Joy-Con's motion sensor (Android 12+, depends
+   on the TV), you aim by pointing. Otherwise the player card says "stick" and you aim
+   with the stick. If pointing moves the crosshair the wrong way, click the stick to try
+   the next motion setting.
+
+Phones can't join while the TV is in Joy-Con mode; they're told to switch it back.
+
 ## Rules
 
 Each round has 10 ducks, released two at a time, and you get 3 shells per pair.

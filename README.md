@@ -138,6 +138,19 @@ press Menu on the TV remote or − on a Joy-Con, to switch.
 
 Phones can't join while the TV is in Joy-Con mode; they're told to switch it back.
 
+### Joy-Con paired to the phone (motion aiming when the TV can't)
+
+Many TVs don't let apps read a Joy-Con's motion sensor, but newer phones often do. In
+that case keep the TV in **Phone** mode and pair the Joy-Con to the phone instead:
+
+1. Phone: *Settings → Bluetooth → Pair new device*, hold the Joy-Con's sync button.
+2. In Duck Blast Remote tap **Check a Joy-Con** (connect screen). It says straight away
+   whether this phone can read the Joy-Con's motion.
+3. If it can: ⚙ → *Aim with…* → *Joy-Con paired to this phone*. Point at the middle of the
+   TV and press Y to recenter. ZR fires. Click the stick if a direction is reversed.
+
+Keep Duck Blast Remote open with the screen on; the phone can sit next to you.
+
 ## Rules
 
 Each round has 10 ducks, released two at a time, and you get 3 shells per pair.

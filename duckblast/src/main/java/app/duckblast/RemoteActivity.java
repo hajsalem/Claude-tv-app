@@ -10,15 +10,20 @@ import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
+import android.hardware.input.InputManager;
 import android.net.nsd.NsdManager;
 import android.net.nsd.NsdServiceInfo;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
 import android.text.InputType;
 import android.view.Gravity;
+import android.view.InputDevice;
 import android.view.KeyEvent;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
@@ -41,7 +46,7 @@ import java.util.Map;
  * sensor gives where the top edge of the phone is pointing; RECENTER marks the
  * middle of the TV and everything else is measured relative to that.
  */
-public class RemoteActivity extends Activity implements SensorEventListener {
+public class RemoteActivity extends Activity implements SensorEventListener, InputManager.InputDeviceListener {
 
     private static final int ORANGE = 0xFFFF7A1A;
 
@@ -68,6 +73,23 @@ public class RemoteActivity extends Activity implements SensorEventListener {
     private float aimX = 0.5f, aimY = 0.5f;
     private float range;          // degrees from the centre to the left/right edge of the TV
     private boolean touchpad;     // no gyro, or the player chose drag-to-aim
+    private boolean joyconAim;    // a Joy-Con paired to this phone does the aiming
+
+    // Joy-Con (or any gamepad) paired to this phone
+    private final Handler ui = new Handler(Looper.getMainLooper());
+    private InputManager inputManager;
+    private int joyconId = -1;
+    private String joyconName;
+    private PadMotion joyconMotion;
+    private float stickX, stickY;
+    private final Runnable stickTick = new Runnable() {
+        @Override public void run() {
+            if (joyconAim && joyconMotion == null && (stickX != 0 || stickY != 0)) {
+                moveAim(stickX * 0.016f * 0.9f, stickY * 0.016f * 0.9f);
+                ui.postDelayed(this, 16);
+            }
+        }
+    };
     private long lastAimSent;
 
     // views
@@ -90,6 +112,9 @@ public class RemoteActivity extends Activity implements SensorEventListener {
         nsd = (NsdManager) getSystemService(NSD_SERVICE);
         range = prefs.getFloat("range", 20f);
         touchpad = rotation == null || prefs.getBoolean("touchpad", false);
+        joyconAim = prefs.getBoolean("joyconAim", false);
+        if (joyconAim) touchpad = false;
+        inputManager = (InputManager) getSystemService(INPUT_SERVICE);
         buildUi();
     }
 
@@ -113,12 +138,16 @@ public class RemoteActivity extends Activity implements SensorEventListener {
     protected void onResume() {
         super.onResume();
         if (rotation != null) sensors.registerListener(this, rotation, 5000);
+        inputManager.registerInputDeviceListener(this, ui);
+        findJoycon();
     }
 
     @Override
     protected void onPause() {
         super.onPause();
         sensors.unregisterListener(this);
+        inputManager.unregisterInputDeviceListener(this);
+        stopJoyconMotion();
     }
 
     // ------------------------------------------------------------------ UI
@@ -173,6 +202,11 @@ public class RemoteActivity extends Activity implements SensorEventListener {
                 + "• Up to 4 phones can play at once.", 14, 0xFF7F8A95);
         tips.setPadding(0, dp(28), 0, 0);
         connectPanel.addView(tips);
+        Button check = button("🎮  Check a Joy-Con", 0xFF2A313A);
+        check.setOnClickListener(v -> showJoyconCheck());
+        LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(56));
+        clp.topMargin = dp(24);
+        connectPanel.addView(check, clp);
         root.addView(scroll);
 
         // play screen
@@ -294,15 +328,174 @@ public class RemoteActivity extends Activity implements SensorEventListener {
                     disconnect();
                     showConnect();
                 });
-        if (rotation != null) {
-            d.setNeutralButton(touchpad ? "Aim with motion" : "Aim with touchpad", (x, y) -> {
-                touchpad = !touchpad;
-                prefs.edit().putBoolean("touchpad", touchpad).apply();
-                if (!touchpad) recenter();
-                pad.invalidate();
-            });
-        }
+        d.setNeutralButton("Aim with…", (x, y) -> chooseAim());
         d.show();
+    }
+
+    private void chooseAim() {
+        String[] names = {"This phone (point it)", "Touchpad (drag)", "Joy-Con paired to this phone"};
+        int cur = joyconAim ? 2 : touchpad ? 1 : 0;
+        new AlertDialog.Builder(this)
+                .setTitle("Aim with")
+                .setSingleChoiceItems(names, cur, (dlg, which) -> {
+                    dlg.dismiss();
+                    if (which == 0 && rotation == null) {
+                        message.setText("This phone has no motion sensor. Use the touchpad or a Joy-Con.");
+                        return;
+                    }
+                    setAimMode(which);
+                    if (which == 2) showJoyconCheck();
+                })
+                .show();
+    }
+
+    private void setAimMode(int mode) {
+        touchpad = mode == 1;
+        joyconAim = mode == 2;
+        prefs.edit().putBoolean("touchpad", touchpad).putBoolean("joyconAim", joyconAim).apply();
+        if (joyconAim) startJoyconMotion();
+        else stopJoyconMotion();
+        recenter();
+        pad.invalidate();
+    }
+
+    // ------------------------------------------------------------------ Joy-Con on this phone
+
+    private static boolean isPadSource(int source) {
+        return (source & InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD
+                || (source & InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK;
+    }
+
+    private void findJoycon() {
+        int found = -1;
+        String name = null;
+        for (int id : InputDevice.getDeviceIds()) {
+            InputDevice dev = InputDevice.getDevice(id);
+            if (dev == null || dev.isVirtual() || !isPadSource(dev.getSources())) continue;
+            found = id;
+            name = dev.getName();
+            if (name != null && name.toLowerCase(Locale.US).contains("joy")) break;
+        }
+        if (found != joyconId) {
+            stopJoyconMotion();
+            joyconId = found;
+            joyconName = name;
+        }
+        if (joyconAim) startJoyconMotion();
+    }
+
+    private void startJoyconMotion() {
+        if (joyconMotion != null || joyconId < 0) return;
+        PadMotion m = new PadMotion(joyconId, (yaw, pitch) -> {
+            if (!joyconAim) return;
+            float r = (float) Math.toRadians(range);
+            moveAim(yaw / (2 * r), -pitch / (2 * r * 0.5625f));
+        }, ui);
+        if (m.start()) joyconMotion = m;
+    }
+
+    private void stopJoyconMotion() {
+        if (joyconMotion != null) joyconMotion.stop();
+        joyconMotion = null;
+    }
+
+    private void moveAim(float dx, float dy) {
+        aimX = clamp(aimX + dx, -0.1f, 1.1f);
+        aimY = clamp(aimY + dy, -0.1f, 1.1f);
+        long now = System.nanoTime();
+        if (link != null && now - lastAimSent > 8_000_000L) {
+            lastAimSent = now;
+            link.aim(aimX, aimY);
+        }
+        if (now / 33_000_000L != lastPadFrame) {
+            lastPadFrame = now / 33_000_000L;
+            pad.invalidate();
+        }
+    }
+
+    private String joyconStatus() {
+        findJoycon();
+        if (joyconId < 0) {
+            return "No Joy-Con connected to this phone.\n\n"
+                    + "To pair: phone Settings → Bluetooth → Pair new device. Hold the small sync button on the "
+                    + "Joy-Con's rail until its lights run, then tap it in the list. Come back here and check again.";
+        }
+        String n = joyconName == null ? "Controller" : joyconName;
+        if (PadMotion.available(joyconId)) {
+            return "✅  " + n + " is connected and this phone CAN read its motion sensor.\n\n"
+                    + "Choose ⚙ → Aim with… → Joy-Con. Point at the TV's centre and press Y to recenter. "
+                    + "ZR fires. If up/down or left/right goes the wrong way, click the stick to try the next setting.";
+        }
+        return "⚠️  " + n + " is connected, but this phone can't read its motion sensor"
+                + (Build.VERSION.SDK_INT < 31 ? " (needs Android 12 or newer)." : ".")
+                + "\n\nIts buttons still work: ZR fires and the stick can aim. Or point the phone instead.";
+    }
+
+    private void showJoyconCheck() {
+        new AlertDialog.Builder(this)
+                .setTitle("Joy-Con check")
+                .setMessage(joyconStatus())
+                .setPositiveButton("OK", null)
+                .setNeutralButton("Check again", (d, w) -> showJoyconCheck())
+                .show();
+    }
+
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent e) {
+        if (!isPadSource(e.getSource()) || !KeyEvent.isGamepadButton(e.getKeyCode())) return super.dispatchKeyEvent(e);
+        if (e.getAction() != KeyEvent.ACTION_DOWN || e.getRepeatCount() != 0) return true;
+        if (e.getDeviceId() != joyconId) findJoycon();
+        switch (e.getKeyCode()) {
+            case KeyEvent.KEYCODE_BUTTON_R2:
+            case KeyEvent.KEYCODE_BUTTON_R1:
+            case KeyEvent.KEYCODE_BUTTON_L2:
+            case KeyEvent.KEYCODE_BUTTON_L1:
+            case KeyEvent.KEYCODE_BUTTON_A:
+                fire();
+                break;
+            case KeyEvent.KEYCODE_BUTTON_Y:
+            case KeyEvent.KEYCODE_BUTTON_X:
+            case KeyEvent.KEYCODE_BUTTON_B:
+                recenter();
+                break;
+            case KeyEvent.KEYCODE_BUTTON_THUMBL:
+            case KeyEvent.KEYCODE_BUTTON_THUMBR:
+                if (joyconMotion != null) {
+                    int n = joyconMotion.nextPreset();
+                    message.setText("Joy-Con aim setting " + (n + 1) + " of " + joyconMotion.presetCount());
+                    recenter();
+                }
+                break;
+            default:
+                break;
+        }
+        return true;
+    }
+
+    @Override
+    public boolean onGenericMotionEvent(MotionEvent e) {
+        if (!isPadSource(e.getSource()) || e.getAction() != MotionEvent.ACTION_MOVE) return super.onGenericMotionEvent(e);
+        float x = e.getAxisValue(MotionEvent.AXIS_X), y = e.getAxisValue(MotionEvent.AXIS_Y);
+        float rx = e.getAxisValue(MotionEvent.AXIS_Z), ry = e.getAxisValue(MotionEvent.AXIS_RZ);
+        if (Math.abs(rx) + Math.abs(ry) > Math.abs(x) + Math.abs(y)) {
+            x = rx;
+            y = ry;
+        }
+        stickX = Math.abs(x) > 0.2f ? x : 0;
+        stickY = Math.abs(y) > 0.2f ? y : 0;
+        ui.removeCallbacks(stickTick);
+        ui.post(stickTick);
+        return true;
+    }
+
+    @Override public void onInputDeviceAdded(int id) {
+        findJoycon();
+    }
+
+    @Override public void onInputDeviceChanged(int id) {}
+
+    @Override public void onInputDeviceRemoved(int id) {
+        if (id == joyconId) findJoycon();
     }
 
     // ------------------------------------------------------------------ discovery
@@ -533,7 +726,7 @@ public class RemoteActivity extends Activity implements SensorEventListener {
             pitch0 = pitch;
             needRecenter = false;
         }
-        if (touchpad) return;
+        if (touchpad || joyconAim) return;
 
         float dyaw = yaw - yaw0;
         while (dyaw > 180) dyaw -= 360;
